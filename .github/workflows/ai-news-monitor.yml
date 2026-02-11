@@ -28,6 +28,11 @@ on:
 permissions:
   contents: read
 
+# Prevent overlapping runs from fighting over the cache.
+concurrency:
+  group: ai-news-monitor-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
@@ -55,19 +60,24 @@ jobs:
             ai-news-state-${{ github.ref_name }}-
 
       # ── Run the monitor ───────────────────────────────────
+      # Inputs are passed via environment variables to avoid
+      # script-injection risk from ${{ inputs.* }} interpolation.
       - name: Run AI News Monitor
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_FORCE_SEND: ${{ inputs.force_send }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_SEED: ${{ inputs.seed }}
         run: |
           EXTRA_ARGS=""
-          if [ "${{ inputs.force_send }}" = "true" ]; then
+          if [ "$INPUT_FORCE_SEND" = "true" ]; then
             EXTRA_ARGS="$EXTRA_ARGS --force-send"
           fi
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "$INPUT_DRY_RUN" = "true" ]; then
             EXTRA_ARGS="$EXTRA_ARGS --dry-run"
           fi
-          if [ "${{ inputs.seed }}" = "true" ]; then
+          if [ "$INPUT_SEED" = "true" ]; then
             EXTRA_ARGS="$EXTRA_ARGS --seed"
           fi
 
