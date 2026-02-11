@@ -53,6 +53,16 @@ USER_AGENT = "AINewsMonitor/1.0 (+https://github.com/acarter881/ai_model_monitor
 MAX_STORED_ENTRIES_PER_SOURCE = 200
 MAX_HN_STORIES_STORED = 500
 
+# Flood protection: if a single source produces more than this many
+# "new" entries in one check, it is almost certainly a cache miss or
+# first-run artefact, not real simultaneous announcements.  The source
+# is silently re-seeded instead of sending notifications.
+MAX_NEW_PER_SOURCE = 5
+
+# Absolute cap on embeds sent per check cycle.  If somehow more than
+# this many slip through, the send layer refuses to post.
+MAX_EMBEDS_PER_CHECK = 10
+
 # ============================================================
 # Source Configuration
 #
@@ -833,6 +843,17 @@ def send_discord(
         log.info("No embeds to send")
         return True
 
+    # Hard safety cap – if something upstream still produced too many
+    # embeds, refuse to send rather than flooding the channel.
+    if len(embeds) > MAX_EMBEDS_PER_CHECK:
+        log.error(
+            "FLOOD PROTECTION: %d embeds exceed hard cap of %d – "
+            "refusing to send.  This is likely a cache/seed issue.",
+            len(embeds),
+            MAX_EMBEDS_PER_CHECK,
+        )
+        return False
+
     if dry_run:
         for i, e in enumerate(embeds, 1):
             log.info("[DRY-RUN] Embed %d: %s", i, e.get("title", "?"))
@@ -1099,6 +1120,26 @@ def run_single_check(args: argparse.Namespace) -> None:
     # 5. Diff
     changes = diff_snapshots(old_state, new_snapshot)
     log.info("Detected %d change(s)", len(changes))
+
+    # 5a. Flood protection ------------------------------------------------
+    # If any single source has more changes than the threshold, it is
+    # almost certainly a cache miss / seed artefact.  Drop those changes
+    # and let the new state absorb the entries silently.
+    if changes:
+        source_counts: dict[str, int] = {}
+        for ch in changes:
+            key = ch.get("source_key", "unknown")
+            source_counts[key] = source_counts.get(key, 0) + 1
+        flooded = {k for k, v in source_counts.items() if v > MAX_NEW_PER_SOURCE}
+        if flooded:
+            log.warning(
+                "Flood protection: sources %s each have >%d new entries "
+                "– treating as re-seed (0 notifications for them)",
+                flooded,
+                MAX_NEW_PER_SOURCE,
+            )
+            changes = [ch for ch in changes if ch.get("source_key") not in flooded]
+            log.info("After flood filter: %d change(s) remain", len(changes))
 
     # 6. Notify
     if changes or args.force_send:
