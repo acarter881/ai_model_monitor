@@ -1,0 +1,84 @@
+name: AI News Monitor
+
+on:
+  schedule:
+    # Run every 10 minutes
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_send:
+        description: "Send a status embed even if nothing changed"
+        required: false
+        default: "false"
+        type: boolean
+      dry_run:
+        description: "Log only, do not post to Discord"
+        required: false
+        default: "false"
+        type: boolean
+      seed:
+        description: "Force seed run (build state, skip notifications)"
+        required: false
+        default: "false"
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── Restore cached state ──────────────────────────────
+      - name: Restore state cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .github/state
+          key: ai-news-state-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ai-news-state-${{ github.ref_name }}-
+
+      # ── Run the monitor ───────────────────────────────────
+      - name: Run AI News Monitor
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXTRA_ARGS=""
+          if [ "${{ inputs.force_send }}" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --force-send"
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --dry-run"
+          fi
+          if [ "${{ inputs.seed }}" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --seed"
+          fi
+
+          python ai_news_monitor.py \
+            --loop \
+            --max-checks 4 \
+            --min-interval-seconds 60 \
+            --max-interval-seconds 120 \
+            $EXTRA_ARGS
+
+      # ── Persist state to cache ────────────────────────────
+      - name: Save state cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .github/state
+          key: ai-news-state-${{ github.ref_name }}-${{ github.run_id }}
