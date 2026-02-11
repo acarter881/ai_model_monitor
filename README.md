@@ -2,7 +2,7 @@
 
 Send a message in a Discord server when relevant information related to a new AI model is released.
 
-Monitors companies that have historically competed for #1 on the [Chatbot Arena text leaderboard](https://lmarena.ai/leaderboard/text/overall) and sends Discord notifications when new blog posts, model uploads, or GitHub releases are detected.
+Monitors companies that have historically competed for #1 on the [Chatbot Arena text leaderboard](https://arena.ai/leaderboard/text/overall-no-style-control) and sends Discord notifications when new blog posts, model uploads, or GitHub releases are detected.
 
 Built for use with [Kalshi](https://kalshi.com) prediction markets — get early signals about model releases so you can place bets before the market adjusts.
 
@@ -32,7 +32,7 @@ The `GITHUB_TOKEN` is provided automatically by GitHub Actions for higher API ra
 
 ### 2. Enable the Workflow
 
-The GitHub Actions workflow runs on a cron schedule (every 10 minutes). Each run performs 4 checks with randomized 60–120 second intervals between them, giving roughly one check every ~1.5 minutes spread across the 10-minute window.
+The GitHub Actions workflow runs on a cron schedule (every 30 minutes by default). The interval is controlled by the `CRON_INTERVAL_MINUTES` env var and matching cron expression at the top of `.github/workflows/ai-news-monitor.yml`. Each run performs 4 checks with randomized 60–120 second intervals between them, spreading checks across the window.
 
 ### 3. First Run (Seeding)
 

@@ -1,9 +1,12 @@
 name: AI News Monitor
 
+env:
+  CRON_INTERVAL_MINUTES: 30
+
 on:
   schedule:
-    # Run every 10 minutes
-    - cron: "*/10 * * * *"
+    # Adjust by changing CRON_INTERVAL_MINUTES above and the cron expression below
+    - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       force_send:
@@ -28,7 +31,7 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
