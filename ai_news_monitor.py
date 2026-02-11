@@ -553,15 +553,24 @@ def diff_snapshots(
             log.info("Seeding blog baseline for %s (%d entries)", source_key, len(new_entries))
             continue
         cfg = SOURCE_CONFIG.get(source_key, {})
+        # Build a set of known titles so that entries fetched from a
+        # *different* RSS URL (with different GUIDs) are still recognised
+        # as duplicates rather than flooding as "new".
+        old_titles = {
+            e.get("title", "").strip().lower()
+            for e in old_entries.values()
+            if e.get("title")
+        }
         for eid, entry in new_entries.items():
-            if eid not in old_entries:
+            title = entry.get("title", "").strip()
+            if eid not in old_entries and title.lower() not in old_titles:
                 changes.append(
                     {
                         "type": "blog",
                         "source_key": source_key,
                         "source_label": cfg.get("label", source_key),
                         "source_color": cfg.get("color", 0x99AAB5),
-                        "title": entry.get("title", "Untitled"),
+                        "title": title or "Untitled",
                         "url": entry.get("url", ""),
                         "published": entry.get("published", ""),
                         "summary": entry.get("summary", ""),
@@ -620,15 +629,21 @@ def diff_snapshots(
     if not old_hn:
         log.info("Seeding HN baseline (%d stories)", len(new.get("hn_stories", {})))
     else:
+        old_hn_titles = {
+            s.get("title", "").strip().lower()
+            for s in old_hn.values()
+            if s.get("title")
+        }
         for sid, story in new.get("hn_stories", {}).items():
-            if sid not in old_hn:
+            title = story.get("title", "").strip()
+            if sid not in old_hn and title.lower() not in old_hn_titles:
                 changes.append(
                     {
                         "type": "hn_story",
                         "source_key": "hn",
                         "source_label": "Hacker News",
                         "source_color": 0xFF6600,
-                        "title": story.get("title", ""),
+                        "title": title,
                         "url": story.get("url", ""),
                         "hn_url": story.get("hn_url", ""),
                         "points": story.get("points", 0),
@@ -1123,6 +1138,15 @@ def main() -> None:
             args.min_interval_seconds,
             args.max_interval_seconds,
         )
+        # If the very first check has no prior state, force seed mode for
+        # the ENTIRE loop.  This prevents floods when a source fails on
+        # check 1 (seed) but succeeds on check 2-4.
+        if not args.seed:
+            prior = load_state(args.state_file)
+            if not prior:
+                log.info("No prior state – forcing seed mode for all %d checks", args.max_checks)
+                args.seed = True
+
         for i in range(args.max_checks):
             log.info("=== Check %d/%d ===", i + 1, args.max_checks)
             run_single_check(args)
