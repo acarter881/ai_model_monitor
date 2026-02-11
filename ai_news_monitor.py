@@ -96,7 +96,7 @@ SOURCE_CONFIG: dict[str, dict[str, Any]] = {
         ],
         "hf_orgs": [],
         "gh_repos": [],
-        "model_names": ["gpt", "o1", "o3", "o4", "chatgpt"],
+        "model_names": ["gpt-4", "gpt-5", "o1", "o3", "o4", "chatgpt"],
     },
     "google": {
         "label": "Google DeepMind",
@@ -107,7 +107,7 @@ SOURCE_CONFIG: dict[str, dict[str, Any]] = {
         ],
         "hf_orgs": ["google"],
         "gh_repos": [],
-        "model_names": ["gemini", "bard", "palm", "deepmind"],
+        "model_names": ["gemini", "bard", "deepmind"],
     },
     "meta": {
         "label": "Meta AI",
@@ -163,9 +163,9 @@ SOURCE_CONFIG: dict[str, dict[str, Any]] = {
         "label": "Amazon",
         "color": 0xFF9900,
         "rss_urls": [],
-        "hf_orgs": ["amazon"],
+        "hf_orgs": ["amazon", "amazon-agi"],
         "gh_repos": [],
-        "model_names": ["nova"],
+        "model_names": ["nova pro", "nova premier", "nova lite", "nova micro", "amazon nova"],
     },
 }
 
@@ -182,7 +182,7 @@ RELEASE_KEYWORDS: list[str] = [
     "new model",
     "available now",
     "generally available",
-    "preview",
+    "public preview",
     "state-of-the-art",
     "sota",
     "benchmark",
@@ -197,25 +197,29 @@ RELEASE_KEYWORDS: list[str] = [
 ]
 
 # Hacker News search queries for catching announcements quickly.
+# Prefer evergreen phrasing over version-specific queries (e.g. "new claude"
+# instead of "claude 4") so the list doesn't need constant updating.
 HN_SEARCH_QUERIES: list[str] = [
     "chatbot arena leaderboard",
     "lmsys arena",
-    "claude opus",
-    "claude sonnet",
-    "gemini pro",
-    "gemini ultra",
-    "gpt-5",
-    "o3 openai",
-    "o4 openai",
-    "llama 4",
-    "grok 3",
-    "grok 4",
-    "mistral large",
-    "deepseek v4",
-    "deepseek v5",
-    "qwen 3",
+    "new claude model",
+    "new gemini model",
+    "new gpt model",
+    "openai new model",
+    "anthropic new model",
+    "google deepmind model",
+    "llama new model",
+    "grok new model",
+    "mistral new model",
+    "deepseek new model",
+    "qwen new model",
     "frontier model release",
+    "state of the art language model",
 ]
+
+# Minimum HN story points required to be included.  Helps filter out
+# low-signal stories that happen to match a broad query.
+HN_MIN_POINTS = 5
 
 
 # ============================================================
@@ -225,12 +229,14 @@ def fetch_url(
     url: str,
     *,
     headers: dict[str, str] | None = None,
-    timeout: int = REQUEST_TIMEOUT,
+    timeout: int | None = None,
     retries: int = 3,
     backoff: float = 2.0,
     token: str | None = None,
 ) -> requests.Response:
     """GET *url* with exponential-backoff retries and jitter."""
+    if timeout is None:
+        timeout = REQUEST_TIMEOUT
     hdrs = {"User-Agent": USER_AGENT}
     if token:
         hdrs["Authorization"] = f"Bearer {token}"
@@ -297,10 +303,6 @@ def fetch_blog_entries(source_key: str, config: dict[str, Any]) -> dict[str, dic
         except Exception as exc:
             log.warning("Failed to fetch RSS for %s from %s: %s", source_key, url, exc)
     return entries
-
-
-# Atom namespace
-_ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
 
 def _parse_feed_xml(xml_text: str) -> list[dict[str, str]]:
@@ -381,14 +383,22 @@ def _parse_atom_entries(root: ET.Element) -> list[dict[str, str]]:
 
 
 def _xml_text(parent: ET.Element, tag: str) -> str:
-    """Return text content of the first child matching *tag*, or ""."""
+    """Return the full text content of *tag*, including any tail text
+    from child elements (handles mixed-content and XHTML bodies)."""
     el = parent.find(tag)
-    return (el.text or "") if el is not None else ""
+    if el is None:
+        return ""
+    # itertext() yields .text and .tail for the element and all children,
+    # which correctly handles <content type="xhtml"> and inline HTML.
+    return "".join(el.itertext())
 
 
 def _clean_html(text: str) -> str:
-    """Rough strip of HTML tags for embed descriptions."""
+    """Strip HTML tags and decode common entities for embed descriptions."""
+    import html as _html
+
     text = re.sub(r"<[^>]+>", " ", text)
+    text = _html.unescape(text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -396,15 +406,38 @@ def _clean_html(text: str) -> str:
 # ============================================================
 # Hugging Face API
 # ============================================================
+# Model-ID suffixes that indicate quantised / derivative uploads
+# rather than genuinely new model releases.
+_HF_NOISE_SUFFIXES: tuple[str, ...] = (
+    "-gguf", "-gptq", "-awq", "-bnb", "-bnb-4bit", "-bnb-8bit",
+    "-exl2", "-fp8", "-fp16", "-int4", "-int8", "-nf4",
+    "-mlx", "-ct2", "-onnx", "-openvino",
+)
+
+
+def _is_hf_noise(model_id: str) -> bool:
+    """Return True if *model_id* looks like a quantised/derivative upload."""
+    lower = model_id.lower()
+    return any(lower.endswith(s) for s in _HF_NOISE_SUFFIXES)
+
+
 def fetch_hf_models(org: str) -> dict[str, dict]:
-    """Return {model_id: info} for recent models from *org*."""
+    """Return {model_id: info} for recent models from *org*.
+
+    Filters out quantised / derivative uploads (GGUF, GPTQ, etc.) to
+    reduce noise and focus on genuinely new model releases.
+    """
     url = f"{HF_API_BASE}/models?author={org}&sort=createdAt&direction=-1&limit=20"
     models: dict[str, dict] = {}
+    skipped = 0
     try:
         resp = fetch_url(url, retries=2)
         for m in resp.json():
             mid = m.get("id", "")
             if not mid:
+                continue
+            if _is_hf_noise(mid):
+                skipped += 1
                 continue
             models[mid] = {
                 "model_id": mid,
@@ -414,7 +447,7 @@ def fetch_hf_models(org: str) -> dict[str, dict]:
                 "likes": m.get("likes", 0),
                 "downloads": m.get("downloads", 0),
             }
-        log.info("Fetched %d HF models for org %s", len(models), org)
+        log.info("Fetched %d HF models for org %s (skipped %d noise)", len(models), org, skipped)
     except Exception as exc:
         log.warning("Failed to fetch HF models for %s: %s", org, exc)
     return models
@@ -466,8 +499,13 @@ def fetch_hn_stories(
             f"&tags=story"
             f"&hitsPerPage=5"
         )
+        numeric_filters = []
         if since_ts:
-            url += f"&numericFilters=created_at_i>{since_ts}"
+            numeric_filters.append(f"created_at_i>{since_ts}")
+        if HN_MIN_POINTS:
+            numeric_filters.append(f"points>{HN_MIN_POINTS}")
+        if numeric_filters:
+            url += f"&numericFilters={','.join(numeric_filters)}"
         try:
             resp = fetch_url(url, retries=1, timeout=15)
             data = resp.json()
@@ -683,18 +721,35 @@ def _source_for_gh_repo(repo: str) -> tuple[str, dict]:
 # ============================================================
 # Priority / keyword helpers
 # ============================================================
-def is_high_priority(text: str) -> bool:
-    """Return *True* if *text* contains model-release-related keywords."""
-    lower = text.lower()
+def _build_priority_pattern() -> re.Pattern[str]:
+    """Compile a single regex from RELEASE_KEYWORDS and model_names.
+
+    Uses word boundaries (``\\b``) so that e.g. "o3" doesn't match
+    "to300" and "nova" only matches as part of a multi-word phrase
+    like "amazon nova".
+    """
+    parts: list[str] = []
     for kw in RELEASE_KEYWORDS:
-        if kw in lower:
-            return True
-    # Check model names
+        parts.append(re.escape(kw))
     for src_cfg in SOURCE_CONFIG.values():
         for name in src_cfg.get("model_names", []):
-            if name.lower() in lower:
-                return True
-    return False
+            parts.append(re.escape(name.lower()))
+    # Sort longest-first so longer phrases match before sub-phrases
+    parts.sort(key=len, reverse=True)
+    combined = "|".join(parts)
+    return re.compile(rf"\b(?:{combined})\b", re.IGNORECASE)
+
+
+_PRIORITY_RE: re.Pattern[str] = _build_priority_pattern()
+
+
+def is_high_priority(text: str) -> bool:
+    """Return *True* if *text* contains model-release-related keywords.
+
+    Uses word-boundary regex matching to avoid false positives from
+    short keywords appearing inside unrelated words.
+    """
+    return bool(_PRIORITY_RE.search(text))
 
 
 # ============================================================
@@ -1008,6 +1063,14 @@ def merge_with_fallback(
                     new_cat[key] = old_data
         merged[category] = new_cat
 
+    # HN stories are a flat dict (not nested by source), so carry forward
+    # the whole thing if the new fetch came back empty.
+    old_hn = old.get("hn_stories", {})
+    new_hn = merged.get("hn_stories", {})
+    if not new_hn and old_hn:
+        log.info("Carrying forward old hn_stories data (new fetch was empty)")
+        merged["hn_stories"] = old_hn
+
     return merged
 
 
@@ -1142,10 +1205,11 @@ def run_single_check(args: argparse.Namespace) -> None:
             log.info("After flood filter: %d change(s) remain", len(changes))
 
     # 6. Notify
+    send_ok = True
     if changes or args.force_send:
         embeds = build_embeds(changes, force_summary=args.force_send)
         log.info("Sending %d embed(s) to Discord", len(embeds))
-        send_discord(
+        send_ok = send_discord(
             args.webhook_url,
             embeds,
             retries=args.retries,
@@ -1155,7 +1219,11 @@ def run_single_check(args: argparse.Namespace) -> None:
     else:
         log.info("No changes detected – nothing to send")
 
-    # 7. Persist
+    # 7. Persist – skip if Discord delivery failed so that the entries
+    #    are retried on the next check instead of being silently lost.
+    if not send_ok:
+        log.warning("Skipping state save because Discord delivery failed – will retry next check")
+        return
     save_state(args.state_file, new_snapshot)
 
 
