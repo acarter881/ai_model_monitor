@@ -548,6 +548,10 @@ def diff_snapshots(
     # --- Blog entries ---
     for source_key, new_entries in new.get("blogs", {}).items():
         old_entries = old.get("blogs", {}).get(source_key, {})
+        if not old_entries:
+            # No prior baseline for this source – absorb silently (seed)
+            log.info("Seeding blog baseline for %s (%d entries)", source_key, len(new_entries))
+            continue
         cfg = SOURCE_CONFIG.get(source_key, {})
         for eid, entry in new_entries.items():
             if eid not in old_entries:
@@ -567,6 +571,9 @@ def diff_snapshots(
     # --- Hugging Face models ---
     for org, new_models in new.get("hf_models", {}).items():
         old_models = old.get("hf_models", {}).get(org, {})
+        if not old_models:
+            log.info("Seeding HF baseline for %s (%d models)", org, len(new_models))
+            continue
         # Find the source_key for this org
         src_key, src_cfg = _source_for_hf_org(org)
         for mid, model in new_models.items():
@@ -589,6 +596,9 @@ def diff_snapshots(
     # --- GitHub releases ---
     for repo, new_releases in new.get("gh_releases", {}).items():
         old_releases = old.get("gh_releases", {}).get(repo, {})
+        if not old_releases:
+            log.info("Seeding GH baseline for %s (%d releases)", repo, len(new_releases))
+            continue
         src_key, src_cfg = _source_for_gh_repo(repo)
         for tag, rel in new_releases.items():
             if tag not in old_releases:
@@ -607,21 +617,24 @@ def diff_snapshots(
 
     # --- Hacker News stories ---
     old_hn = old.get("hn_stories", {})
-    for sid, story in new.get("hn_stories", {}).items():
-        if sid not in old_hn:
-            changes.append(
-                {
-                    "type": "hn_story",
-                    "source_key": "hn",
-                    "source_label": "Hacker News",
-                    "source_color": 0xFF6600,
-                    "title": story.get("title", ""),
-                    "url": story.get("url", ""),
-                    "hn_url": story.get("hn_url", ""),
-                    "points": story.get("points", 0),
-                    "num_comments": story.get("num_comments", 0),
-                }
-            )
+    if not old_hn:
+        log.info("Seeding HN baseline (%d stories)", len(new.get("hn_stories", {})))
+    else:
+        for sid, story in new.get("hn_stories", {}).items():
+            if sid not in old_hn:
+                changes.append(
+                    {
+                        "type": "hn_story",
+                        "source_key": "hn",
+                        "source_label": "Hacker News",
+                        "source_color": 0xFF6600,
+                        "title": story.get("title", ""),
+                        "url": story.get("url", ""),
+                        "hn_url": story.get("hn_url", ""),
+                        "points": story.get("points", 0),
+                        "num_comments": story.get("num_comments", 0),
+                    }
+                )
 
     return changes
 
