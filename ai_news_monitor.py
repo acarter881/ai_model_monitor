@@ -167,6 +167,46 @@ SOURCE_CONFIG: dict[str, dict[str, Any]] = {
         "gh_repos": [],
         "model_names": ["nova pro", "nova premier", "nova lite", "nova micro", "amazon nova"],
     },
+    "bytedance": {
+        "label": "ByteDance Seed",
+        "color": 0x00D1FF,
+        "rss_urls": [],
+        "hf_orgs": ["ByteDance-Seed"],
+        "gh_repos": [],
+        "model_names": ["doubao", "seed-2", "seed 2", "seed-oss"],
+    },
+    "zhipu": {
+        "label": "Zhipu AI",
+        "color": 0x6366F1,
+        "rss_urls": [],
+        "hf_orgs": ["THUDM", "zai-org"],
+        "gh_repos": [],
+        "model_names": ["glm-5", "glm-4", "chatglm", "codegeex"],
+    },
+    "stepfun": {
+        "label": "StepFun",
+        "color": 0x14B8A6,
+        "rss_urls": [],
+        "hf_orgs": ["stepfun-ai"],
+        "gh_repos": [],
+        "model_names": ["step-3", "step3", "step-audio"],
+    },
+    "minimax": {
+        "label": "MiniMax",
+        "color": 0x8B5CF6,
+        "rss_urls": [],
+        "hf_orgs": ["MiniMaxAI"],
+        "gh_repos": [],
+        "model_names": ["minimax-m2", "minimax-m3", "minimax-text", "minimax-vl"],
+    },
+    "baidu": {
+        "label": "Baidu (ERNIE)",
+        "color": 0x2932E1,
+        "rss_urls": [],
+        "hf_orgs": ["baidu"],
+        "gh_repos": ["PaddlePaddle/ERNIE"],
+        "model_names": ["ernie"],
+    },
 }
 
 # Broad keywords indicating a model release or benchmark result.
@@ -213,6 +253,11 @@ HN_SEARCH_QUERIES: list[str] = [
     "mistral new model",
     "deepseek new model",
     "qwen new model",
+    "doubao bytedance model",
+    "glm zhipu model",
+    "stepfun step model",
+    "minimax model",
+    "ernie baidu model",
     "frontier model release",
     "state of the art language model",
 ]
