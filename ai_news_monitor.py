@@ -527,16 +527,112 @@ def fetch_gh_releases(repo: str, token: str | None = None) -> dict[str, dict]:
 # ============================================================
 # Hacker News (Algolia) API
 # ============================================================
+
+# ---------- HN relevance filter (two-stage: broad fetch → strict filter) ----------
+# Words/phrases in a title that indicate the post is about a tracked
+# company or model family.  Built once at module load from SOURCE_CONFIG.
+_HN_TRACKED_NAMES: set[str] = set()
+for _cfg in SOURCE_CONFIG.values():
+    _HN_TRACKED_NAMES.add(_cfg["label"].split()[0].lower())  # e.g. "anthropic", "google", "meta"
+    for _n in _cfg.get("model_names", []):
+        _HN_TRACKED_NAMES.add(_n.lower())
+# Add a few extra synonyms / short names that appear in HN titles
+_HN_TRACKED_NAMES |= {
+    "anthropic", "openai", "deepmind", "meta ai", "xai", "x.ai",
+    "mistral", "deepseek", "alibaba", "bytedance", "zhipu",
+    "stepfun", "minimax", "baidu",
+    "chatbot arena", "lmsys", "arena leaderboard",
+}
+
+# Title substrings that almost always indicate noise (tooling, business,
+# regulation, opinions, etc.) regardless of other keywords.
+_HN_NOISE_PREFIXES: tuple[str, ...] = (
+    "show hn:",
+    "ask hn:",
+    "tell hn:",
+    "launch hn:",
+)
+
+_HN_NOISE_KEYWORDS: tuple[str, ...] = (
+    "hiring", "is hiring", "raises", "funding round", "series a",
+    "series b", "series c", "ipo", "yc w", "yc s", "(yc ",
+    "startup", "side project",
+    "regulation", "regulate", "ban ai", "ai safety debate",
+    "ai ethics", "ai bubble", "ai hype",
+    "tutorial", "course", "how to build", "how i built",
+    "fine-tuning guide", "rag framework", "rag tutorial",
+    "inference server", "self-host", "open-source alternative",
+    "ai wrapper", "ai agent framework",
+    "ranked", "every developer",
+    "slop", "ai detection", "ai writing",
+)
+
+# Positive signal words — when a tracked name IS present, these
+# strengthen confidence that the post is about a new model / benchmark.
+_HN_POSITIVE_SIGNALS: tuple[str, ...] = (
+    "release", "released", "releases", "launch", "launches", "launched",
+    "announce", "announces", "announced", "introducing",
+    "new model", "foundation model", "frontier model",
+    "benchmark", "leaderboard", "arena", "lmsys",
+    "scores", "tops", "beats", "surpasses", "outperforms",
+    "#1", "number one", "top spot", "state-of-the-art", "sota",
+    "available", "open source", "open-source", "weights",
+    "hugging face", "huggingface",
+)
+
+
+def _hn_is_relevant(title: str) -> bool:
+    """Return True if an HN story title is relevant to leaderboard tracking.
+
+    A post is relevant if:
+    1. Its title mentions a tracked company or model name, AND
+    2. It doesn't match noise patterns (Show HN, hiring, tooling, etc.)
+
+    Posts that mention a tracked name alongside a positive signal keyword
+    (release, benchmark, leaderboard, etc.) always pass.
+    """
+    lower = title.lower().strip()
+
+    # Reject noise prefixes unconditionally
+    for prefix in _HN_NOISE_PREFIXES:
+        if lower.startswith(prefix):
+            # Exception: Show HN that explicitly names a tracked model
+            if prefix == "show hn:":
+                rest = lower[len(prefix):]
+                if any(name in rest for name in _HN_TRACKED_NAMES):
+                    break  # allow through to the main check
+            return False
+
+    # Reject noise keywords
+    for noise in _HN_NOISE_KEYWORDS:
+        if noise in lower:
+            return False
+
+    # Must mention a tracked company or model name
+    has_tracked_name = any(name in lower for name in _HN_TRACKED_NAMES)
+    if not has_tracked_name:
+        return False
+
+    # Bonus: if a positive signal keyword is also present, definitely relevant
+    # If no positive signal, still allow it (the tracked name alone is enough
+    # to warrant watching) — the noise filters above already removed junk.
+    return True
+
+
 def fetch_hn_stories(
     queries: list[str],
     since_ts: int = 0,
 ) -> dict[str, dict]:
     """Search HN for recent stories matching *queries*.
 
+    Stage 1: Broad fetch from Algolia API.
+    Stage 2: Strict relevance filter — rejects noise posts that don't
+    mention a tracked company/model or match noise patterns.
+
     Only returns stories created after *since_ts* (Unix timestamp).
     De-duplicates across queries by story objectID.
     """
-    stories: dict[str, dict] = {}
+    raw_stories: dict[str, dict] = {}
     for q in queries:
         url = (
             f"{HN_API_BASE}/search_by_date"
@@ -556,9 +652,9 @@ def fetch_hn_stories(
             data = resp.json()
             for hit in data.get("hits", []):
                 sid = hit.get("objectID", "")
-                if not sid or sid in stories:
+                if not sid or sid in raw_stories:
                     continue
-                stories[sid] = {
+                raw_stories[sid] = {
                     "title": hit.get("title", ""),
                     "url": hit.get("url") or f"https://news.ycombinator.com/item?id={sid}",
                     "hn_url": f"https://news.ycombinator.com/item?id={sid}",
@@ -569,7 +665,22 @@ def fetch_hn_stories(
                 }
         except Exception as exc:
             log.debug("HN search failed for query %r: %s", q, exc)
-    log.info("Fetched %d unique HN stories across %d queries", len(stories), len(queries))
+
+    # Stage 2: relevance filter
+    stories: dict[str, dict] = {}
+    rejected = 0
+    for sid, story in raw_stories.items():
+        title = story.get("title", "")
+        if _hn_is_relevant(title):
+            stories[sid] = story
+        else:
+            rejected += 1
+            log.debug("HN rejected (irrelevant): %s — %r", sid, title)
+
+    log.info(
+        "HN: fetched %d raw stories, kept %d relevant, rejected %d",
+        len(raw_stories), len(stories), rejected,
+    )
     return stories
 
 
